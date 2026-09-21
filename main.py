@@ -6,16 +6,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QMenu,
-    QFileDialog
+    QFileDialog,
 )
 from PySide6.QtGui import QAction, QKeySequence
 import sys
+import os
 
 
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Texter")
         self.resize(1000, 700)
 
         self.cursor_position = "0:0"
@@ -23,10 +23,11 @@ class Window(QMainWindow):
         self.symbols = 0
         self.zoom = 100
 
-        self.curent_file: str | None = None
+        self.current_file: str | None = None
         self.is_modified: bool = False
 
         self._setup_ui()
+        self._update_title()
 
     def _setup_ui(self):
         self.text_edit_entry = QTextEdit(self)
@@ -38,7 +39,15 @@ class Window(QMainWindow):
         self._setup_status_bar()
 
     def _on_text_changed(self):
-        self.is_modified=True
+        if not self.is_modified:
+            self.is_modified = True
+            self._update_title()
+
+    def closeEvent(self, event):
+        if self._maybe_save():
+            event.accept()
+        else:
+            event.ignore()
 
     def _setup_toolbar(self):
         self.tool_bar = QToolBar(self)
@@ -52,7 +61,8 @@ class Window(QMainWindow):
         self.addToolBar(self.tool_bar)
 
     def _add_toolbar_action(self, toolbar: QToolBar, text, tooltip, checkable=False):
-        act = QAction(text, self)
+        act = QAction(text)
+        act.setParent(self)
         act.setToolTip(tooltip)
         act.setCheckable(checkable)
         toolbar.addAction(act)
@@ -63,37 +73,66 @@ class Window(QMainWindow):
 
         self.file_menu = self.menu_bar.addMenu("File")
 
-        self._add_action(self.file_menu, "New", QKeySequence("Ctrl+N"), slot=self._new_file)
-        self._add_action(self.file_menu, "Open", QKeySequence("Ctrl+O"))
-        self._add_action(self.file_menu, "Save", QKeySequence("Ctrl+S"))
-        self._add_action(self.file_menu, "Save As...", QKeySequence("Ctrl+Shift+S"), slot=self._save_file_as)
+        self._add_action(
+            self.file_menu, "New", QKeySequence.StandardKey.New, slot=self._new_file
+        )
+
+        self._add_action(
+            self.file_menu, "Open", QKeySequence.StandardKey.Open, slot=self._open_file
+        )
+
+        self._add_action(
+            self.file_menu, "Save", QKeySequence.StandardKey.Save, slot=self._save_file
+        )
+
+        self._add_action(
+            self.file_menu,
+            "Save As...",
+            QKeySequence.StandardKey.SaveAs,
+            slot=self._save_file_as,
+        )
+
         self.file_menu.addSeparator()
-        self._add_action(self.file_menu, "Print", QKeySequence("Ctrl+P"))
+
+        self._add_action(self.file_menu, "Print", QKeySequence.StandardKey.Print)
+
         self.file_menu.addSeparator()
-        self._add_action(self.file_menu, "Quit", QKeySequence("Ctrl+Q"))
+
+        self._add_action(
+            self.file_menu,
+            "Quit",
+            QKeySequence.StandardKey.Quit,
+            slot=self.close,
+        )
 
         self.edit_menu = self.menu_bar.addMenu("Edit")
 
-        self._add_action(self.edit_menu, "Undo", QKeySequence("Ctrl+Z"))
-        self._add_action(self.edit_menu, "Redo", QKeySequence("Ctrl+Shift+Z"))
+        self._add_action(self.edit_menu, "Undo", QKeySequence.StandardKey.Undo)
+        self._add_action(self.edit_menu, "Redo", QKeySequence.StandardKey.Redo)
         self.edit_menu.addSeparator()
-        self._add_action(self.edit_menu, "Copy", QKeySequence("Ctrl+C"))
-        self._add_action(self.edit_menu, "Paste", QKeySequence("Ctrl+V"))
-        self._add_action(self.edit_menu, "Cut", QKeySequence("Ctrl+X"))
+        self._add_action(self.edit_menu, "Copy", QKeySequence.StandardKey.Copy)
+        self._add_action(self.edit_menu, "Paste", QKeySequence.StandardKey.Paste)
+        self._add_action(self.edit_menu, "Cut", QKeySequence.StandardKey.Cut)
         self.edit_menu.addSeparator()
-        self._add_action(self.edit_menu, "Select All", QKeySequence("Ctrl+A"))
+        self._add_action(
+            self.edit_menu, "Select All", QKeySequence.StandardKey.SelectAll
+        )
 
         self.view_menu = self.menu_bar.addMenu("View")
 
-        self._add_action(self.view_menu, "Zoom In", QKeySequence("Ctrl++"))
-        self._add_action(self.view_menu, "Zoom Out", QKeySequence("Ctrl+-"))
+        self._add_action(self.view_menu, "Zoom In", QKeySequence.StandardKey.ZoomIn)
+        self._add_action(self.view_menu, "Zoom Out", QKeySequence.StandardKey.ZoomOut)
         self.view_menu.addSeparator()
         self._add_action(self.view_menu, "Reset Zoom", QKeySequence("Ctrl+0"))
 
         self.reference_menu = self.menu_bar.addMenu("Reference")
-        self._add_action(self.reference_menu, "About Texter", QKeySequence("F1"))
+        self._add_action(
+            self.reference_menu, "About Texter", QKeySequence("F1"), slot=self._about
+        )
 
-    def _add_action(self, menu: QMenu, text, shortcut, checkable=False, checked=False, slot=None):
+    def _add_action(
+        self, menu: QMenu, text, shortcut, checkable=False, checked=False, slot=None
+    ):
         act = QAction(text)
         act.setParent(self)
         if shortcut:
@@ -121,47 +160,110 @@ class Window(QMainWindow):
         self.status_bar.addWidget(self.zoom_label)
 
     def _new_file(self):
-        if self.is_modified:
-            need_save = self._maybe_save()
-
-            if need_save:
-                print("Save")
-            elif not need_save:
-                print("Discard")
-            elif need_save is None:
-                return
+        if not self._maybe_save():
+            return
 
         self.text_edit_entry.clear()
+        self.current_file = None
+        self.is_modified = False
+        self._update_title()
 
     def _maybe_save(self):
-            ask = QMessageBox(self)
-            ask.setWindowTitle("Texter")
-            ask.setText("Save changes?")
-            ask.setIcon(QMessageBox.Icon.Warning)
-            ask.setStandardButtons(
-                QMessageBox.StandardButton.Save
-                | QMessageBox.StandardButton.Discard
-                | QMessageBox.StandardButton.Cancel
-            )
-            ask.setDefaultButton(QMessageBox.StandardButton.Save)
+        if not self.is_modified:
+            return True
 
-            result = ask.exec()
+        ask = QMessageBox(self)
+        ask.setWindowTitle("Texter")
+        ask.setText("Save changes?")
+        ask.setIcon(QMessageBox.Icon.Warning)
+        ask.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        ask.setDefaultButton(QMessageBox.StandardButton.Save)
 
-            if result == QMessageBox.StandardButton.Save:
-                return True
-            elif result == QMessageBox.StandardButton.Discard:
-                return False
-            else:
-                return None
+        result = ask.exec()
 
-    def _save_file_as(self):
+        if result == QMessageBox.StandardButton.Save:
+            return self._save_file()
+        elif result == QMessageBox.StandardButton.Discard:
+            return True
+        else:
+            return False
+
+    def _save_file_as(self) -> bool:
         path, _ = QFileDialog.getSaveFileName(
-                                                self,
-                                                "Save As...",
-                                                "",
-                                                "Text files (*.txt);;All files (*)")
-        with open(path, "wr", encoding="utf-8") as f:
+            self, "Save As...", "", "Text files (*.txt);;All files (*)"
+        )
+        if not path:
+            return False
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(self.text_edit_entry.toPlainText())
+        except OSError as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить:\n{e}")
+            return False
+
+        self.current_file = path  # ← ЗАПОМНИТЬ путь
+        self.is_modified = False  # ← СБРОСИТЬ флаг
+        self._update_title()  # ← ОБНОВИТЬ заголовок
+        return True
+
+    def _save_file(self) -> bool:
+        if self.current_file is None:
+            return self._save_file_as()
+
+        try:
+            with open(self.current_file, "w", encoding="utf-8") as f:
+                f.write(self.text_edit_entry.toPlainText())
+        except OSError as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить:\n{e}")
+            return False
+
+        self.is_modified = False
+        self._update_title()
+        return True
+
+    def _open_file(self):
+        if not self._maybe_save():
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open File", "", "Text Files (*.txt);;All files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть:\n{e}")
+            return
+
+        self.text_edit_entry.setPlainText(text)
+        self.current_file = path
+        self.is_modified = False
+        self._update_title()
+
+    def _update_title(self):
+        name = os.path.basename(self.current_file) if self.current_file else "New"
+        star = " *" if self.is_modified else ""
+        self.setWindowTitle(f"Texter - {name}{star}")
+
+    def _about(self):
+        about_text = """
+        Texter 1.0.
+
+        Simple text editor.
+        Written in Python, with the graphical part in PySide6.
+
+        Author: CMYKNIK.
+        """
+        about_window = QMessageBox.about(self, "About Texter", about_text)
+
 
 def main():
     app = QApplication(sys.argv)
