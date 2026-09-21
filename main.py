@@ -107,15 +107,43 @@ class Window(QMainWindow):
 
         self.edit_menu = self.menu_bar.addMenu("Edit")
 
-        self._add_action(self.edit_menu, "Undo", QKeySequence.StandardKey.Undo)
-        self._add_action(self.edit_menu, "Redo", QKeySequence.StandardKey.Redo)
-        self.edit_menu.addSeparator()
-        self._add_action(self.edit_menu, "Copy", QKeySequence.StandardKey.Copy)
-        self._add_action(self.edit_menu, "Paste", QKeySequence.StandardKey.Paste)
-        self._add_action(self.edit_menu, "Cut", QKeySequence.StandardKey.Cut)
+        self._add_action(
+            self.edit_menu,
+            "Undo",
+            QKeySequence.StandardKey.Undo,
+            slot=self.text_edit_entry.undo,
+        )
+        self._add_action(
+            self.edit_menu,
+            "Redo",
+            QKeySequence.StandardKey.Redo,
+            slot=self.text_edit_entry.redo,
+        )
         self.edit_menu.addSeparator()
         self._add_action(
-            self.edit_menu, "Select All", QKeySequence.StandardKey.SelectAll
+            self.edit_menu,
+            "Copy",
+            QKeySequence.StandardKey.Copy,
+            slot=self.text_edit_entry.copy,
+        )
+        self._add_action(
+            self.edit_menu,
+            "Paste",
+            QKeySequence.StandardKey.Paste,
+            slot=self.text_edit_entry.paste,
+        )
+        self._add_action(
+            self.edit_menu,
+            "Cut",
+            QKeySequence.StandardKey.Cut,
+            slot=self.text_edit_entry.cut,
+        )
+        self.edit_menu.addSeparator()
+        self._add_action(
+            self.edit_menu,
+            "Select All",
+            QKeySequence.StandardKey.SelectAll,
+            slot=self.text_edit_entry.selectAll,
         )
 
         self.view_menu = self.menu_bar.addMenu("View")
@@ -254,15 +282,14 @@ class Window(QMainWindow):
         self.setWindowTitle(f"Texter - {name}{star}")
 
     def _about(self):
-        about_text = """
-        Texter 1.0.
-
-        Simple text editor.
-        Written in Python, with the graphical part in PySide6.
-
-        Author: CMYKNIK.
-        """
-        about_window = QMessageBox.about(self, "About Texter", about_text)
+        QMessageBox.about(
+            self,
+            "About Texter",
+            "Texter 1.0.\n"
+            "Simple text editor.\n"
+            "Written in Python, with the graphical part in PySide6.\n"
+            "Author: CMYKNIK.",
+        )
 
 
 def main():
