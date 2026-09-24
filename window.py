@@ -1,5 +1,3 @@
-# window.py
-
 from PySide6.QtWidgets import (
     QMainWindow,
     QTextEdit,
@@ -9,9 +7,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMenu,
 )
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QFont, QTextCursor
 
 import os
+
+from file_ops import save_text_to_file, load_text_from_file
 
 
 class Window(QMainWindow):
@@ -19,9 +19,7 @@ class Window(QMainWindow):
         super().__init__()
         self.resize(1000, 700)
 
-        self.cursor_position = "0:0"
         self.encoding = "UTF-8"
-        self.symbols = 0
         self.zoom = 100
 
         self.current_file: str | None = None
@@ -33,8 +31,14 @@ class Window(QMainWindow):
     def _setup_ui(self):
         self.text_edit_entry = QTextEdit(self)
         self.base_font_size = self.text_edit_entry.font().pointSizeF()
-        self.cursor_pos = self.text_edit_entry.textCursor()
         self.text_edit_entry.textChanged.connect(self._on_text_changed)
+        self.text_edit_entry.currentCharFormatChanged.connect(self._sync_format_buttons)
+        self.text_edit_entry.selectionChanged.connect(
+            lambda: self._sync_format_buttons(self._current_format())
+        )
+
+        self.text_edit_entry.cursorPositionChanged.connect(self._on_cursor_moved)
+
         self.setCentralWidget(self.text_edit_entry)
 
         self._setup_toolbar()
@@ -46,8 +50,24 @@ class Window(QMainWindow):
         line = cursor.blockNumber() + 1
         col = cursor.positionInBlock() + 1
         self.cursor_position_label.setText(f"{line}:{col}")
+        self._sync_format_buttons(self._current_format())
+
+    def _current_format(self):
+        cursor = self.text_edit_entry.textCursor()
+        if cursor.hasSelection():
+            pos = cursor.selectionStart()
+            cursor.setPosition(pos)
+            cursor.setPosition(pos + 1, QTextCursor.MoveMode.KeepAnchor)
+            return cursor.charFormat()
+        return self.text_edit_entry.currentCharFormat()
 
     def _on_text_changed(self):
+        self._mark_modified()
+
+        count = len(self.text_edit_entry.toPlainText())
+        self.symbols_label.setText(str(count))
+
+    def _mark_modified(self):
         if not self.is_modified:
             self.is_modified = True
             self._update_title()
@@ -60,22 +80,108 @@ class Window(QMainWindow):
 
     def _setup_toolbar(self):
         self.tool_bar = QToolBar(self)
-        self._add_toolbar_action(self.tool_bar, "B", "Bold", checkable=True)
-        self._add_toolbar_action(self.tool_bar, "I", "Italic", checkable=True)
-        self._add_toolbar_action(self.tool_bar, "U", "Underline", checkable=True)
+        self.bold_button = self._add_toolbar_action(
+            self.tool_bar,
+            "B",
+            "Bold",
+            checkable=True,
+            style="bold",
+            slot=self._toggle_bold,
+        )
+        self.italic_button = self._add_toolbar_action(
+            self.tool_bar,
+            "I",
+            "Italic",
+            checkable=True,
+            style="italic",
+            slot=self._toggle_italic,
+        )
+        self.underline_button = self._add_toolbar_action(
+            self.tool_bar,
+            "U",
+            "Underline",
+            checkable=True,
+            style="underline",
+            slot=self._toggle_underline,
+        )
         self.tool_bar.addSeparator()
-        self._add_toolbar_action(self.tool_bar, "S", "Crossed", checkable=True)
-        self._add_toolbar_action(self.tool_bar, "R", "Reference", checkable=False)
+        self.strikethrough_button = self._add_toolbar_action(
+            self.tool_bar,
+            "S",
+            "Strikethrough",
+            checkable=True,
+            style="strike",
+            slot=self._toggle_strikethrough,
+        )
+        self.reference_button = self._add_toolbar_action(
+            self.tool_bar, "🔗", "Reference", checkable=False
+        )
         self.tool_bar.setMovable(False)
         self.addToolBar(self.tool_bar)
 
-    def _add_toolbar_action(self, toolbar: QToolBar, text, tooltip, checkable=False):
+    def _add_toolbar_action(
+        self, toolbar, text, tooltip, checkable=False, style=None, slot=None
+    ):
         act = QAction(text)
         act.setParent(self)
         act.setToolTip(tooltip)
         act.setCheckable(checkable)
+
+        if style:
+            font = act.font()
+            if style == "bold":
+                font.setBold(True)
+            elif style == "italic":
+                font.setItalic(True)
+            elif style == "underline":
+                font.setUnderline(True)
+            elif style == "strike":
+                font.setStrikeOut(True)
+            font.setPointSize(font.pointSize() + 4)
+            act.setFont(font)
+
+        if slot is not None:
+            act.triggered.connect(slot)
+
         toolbar.addAction(act)
         return act
+
+    def _toggle_bold(self):
+        fmt = self.text_edit_entry.currentCharFormat()
+        is_bold = fmt.fontWeight() >= QFont.Weight.Bold
+        fmt.setFontWeight(QFont.Weight.Normal if is_bold else QFont.Weight.Bold)
+        self.text_edit_entry.mergeCurrentCharFormat(fmt)
+        self._mark_modified()
+
+    def _toggle_italic(self):
+        fmt = self.text_edit_entry.currentCharFormat()
+        fmt.setFontItalic(not fmt.fontItalic())
+        self.text_edit_entry.mergeCurrentCharFormat(fmt)
+        self._mark_modified()
+
+    def _toggle_underline(self):
+        fmt = self.text_edit_entry.currentCharFormat()
+        fmt.setFontUnderline(not fmt.fontUnderline())
+        self.text_edit_entry.mergeCurrentCharFormat(fmt)
+        self._mark_modified()
+
+    def _toggle_strikethrough(self):
+        fmt = self.text_edit_entry.currentCharFormat()
+        fmt.setFontStrikeOut(not fmt.fontStrikeOut())
+        self.text_edit_entry.mergeCurrentCharFormat(fmt)
+        self._mark_modified()
+
+    def _sync_format_buttons(self, fmt):
+        is_bold = fmt.fontWeight() >= QFont.Weight.Bold
+        for button, checked in (
+            (self.bold_button, is_bold),
+            (self.italic_button, fmt.fontItalic()),
+            (self.underline_button, fmt.fontUnderline()),
+            (self.strikethrough_button, fmt.fontStrikeOut()),
+        ):
+            button.blockSignals(True)
+            button.setChecked(checked)
+            button.blockSignals(False)
 
     def _setup_menu(self):
         self.menu_bar = self.menuBar()
@@ -202,7 +308,7 @@ class Window(QMainWindow):
         self.encoding_label = QLabel(self.encoding, self.status_bar)
         self.status_bar.addWidget(self.encoding_label)
 
-        self.symbols_label = QLabel(str(self.symbols), self.status_bar)
+        self.symbols_label = QLabel("0", self.status_bar)
         self.status_bar.addWidget(self.symbols_label)
 
         self.zoom_label = QLabel(f"{self.zoom}%", self.status_bar)
@@ -242,33 +348,24 @@ class Window(QMainWindow):
             return False
 
     def _save_file_as(self) -> bool:
-        path, _ = QFileDialog.getSaveFileName(
+        path, _ = QFileDialog.getSaveFileName(  # ← ВОТ ЗДЕСЬ path появлялся
             self, "Save As...", "", "Text files (*.txt);;All files (*)"
         )
         if not path:
             return False
-
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(self.text_edit_entry.toPlainText())
-        except OSError as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить:\n{e}")
+        if not save_text_to_file(path, self.text_edit_entry.toPlainText()):
             return False
 
-        self.current_file = path  # ← ЗАПОМНИТЬ путь
-        self.is_modified = False  # ← СБРОСИТЬ флаг
-        self._update_title()  # ← ОБНОВИТЬ заголовок
+        self.current_file = path
+        self.is_modified = False
+        self._update_title()
         return True
 
     def _save_file(self) -> bool:
         if self.current_file is None:
             return self._save_file_as()
 
-        try:
-            with open(self.current_file, "w", encoding="utf-8") as f:
-                f.write(self.text_edit_entry.toPlainText())
-        except OSError as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить:\n{e}")
+        if not save_text_to_file(self.current_file, self.text_edit_entry.toPlainText()):
             return False
 
         self.is_modified = False
@@ -285,11 +382,8 @@ class Window(QMainWindow):
         if not path:
             return
 
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                text = f.read()
-        except OSError as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть:\n{e}")
+        text = load_text_from_file(path)
+        if text is None:
             return
 
         self.text_edit_entry.setPlainText(text)
