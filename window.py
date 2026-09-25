@@ -30,6 +30,10 @@ class Window(QMainWindow):
 
     def _setup_ui(self):
         self.text_edit_entry = QTextEdit(self)
+        font = self.text_edit_entry.font()
+        font.setFamily("Calibri")
+        font.setPointSize(12)
+        self.text_edit_entry.setFont(font)
         self.base_font_size = self.text_edit_entry.font().pointSizeF()
         self.text_edit_entry.textChanged.connect(self._on_text_changed)
         self.text_edit_entry.currentCharFormatChanged.connect(self._sync_format_buttons)
@@ -348,12 +352,12 @@ class Window(QMainWindow):
             return False
 
     def _save_file_as(self) -> bool:
-        path, _ = QFileDialog.getSaveFileName(  # ← ВОТ ЗДЕСЬ path появлялся
+        path, _ = QFileDialog.getSaveFileName(
             self, "Save As...", "", "Text files (*.txt);;All files (*)"
         )
         if not path:
             return False
-        if not save_text_to_file(path, self.text_edit_entry.toPlainText()):
+        if not save_text_to_file(path, self.text_edit_entry.toHtml()):
             return False
 
         self.current_file = path
@@ -365,7 +369,7 @@ class Window(QMainWindow):
         if self.current_file is None:
             return self._save_file_as()
 
-        if not save_text_to_file(self.current_file, self.text_edit_entry.toPlainText()):
+        if not save_text_to_file(self.current_file, self.text_edit_entry.toHtml()):
             return False
 
         self.is_modified = False
