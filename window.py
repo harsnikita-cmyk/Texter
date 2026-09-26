@@ -1,17 +1,18 @@
 from PySide6.QtWidgets import (
     QMainWindow,
-    QTextEdit,
     QToolBar,
     QLabel,
     QMessageBox,
     QFileDialog,
     QMenu,
+    QInputDialog,
 )
-from PySide6.QtGui import QAction, QKeySequence, QFont, QTextCursor
+from PySide6.QtGui import QAction, QKeySequence, QFont, QTextCursor, QTextCharFormat, QColor
 
 import os
 
 from file_ops import save_text_to_file, load_text_from_file
+from text_editor import TexterEdit
 
 
 class Window(QMainWindow):
@@ -29,7 +30,7 @@ class Window(QMainWindow):
         self._update_title()
 
     def _setup_ui(self):
-        self.text_edit_entry = QTextEdit(self)
+        self.text_edit_entry = TexterEdit(self)
         font = self.text_edit_entry.font()
         font.setFamily("Calibri")
         font.setPointSize(12)
@@ -118,7 +119,11 @@ class Window(QMainWindow):
             slot=self._toggle_strikethrough,
         )
         self.reference_button = self._add_toolbar_action(
-            self.tool_bar, "🔗", "Reference", checkable=False
+            self.tool_bar,
+            "🔗",
+            "Reference",
+            checkable=False,
+            slot=self._insert_reference,
         )
         self.tool_bar.setMovable(False)
         self.addToolBar(self.tool_bar)
@@ -151,28 +156,48 @@ class Window(QMainWindow):
         return act
 
     def _toggle_bold(self):
-        fmt = self.text_edit_entry.currentCharFormat()
+        fmt = self._current_format()
         is_bold = fmt.fontWeight() >= QFont.Weight.Bold
         fmt.setFontWeight(QFont.Weight.Normal if is_bold else QFont.Weight.Bold)
         self.text_edit_entry.mergeCurrentCharFormat(fmt)
         self._mark_modified()
 
     def _toggle_italic(self):
-        fmt = self.text_edit_entry.currentCharFormat()
+        fmt = self._current_format()
         fmt.setFontItalic(not fmt.fontItalic())
         self.text_edit_entry.mergeCurrentCharFormat(fmt)
         self._mark_modified()
 
     def _toggle_underline(self):
-        fmt = self.text_edit_entry.currentCharFormat()
+        fmt = self._current_format()
         fmt.setFontUnderline(not fmt.fontUnderline())
         self.text_edit_entry.mergeCurrentCharFormat(fmt)
         self._mark_modified()
 
     def _toggle_strikethrough(self):
-        fmt = self.text_edit_entry.currentCharFormat()
+        fmt = self._current_format()
         fmt.setFontStrikeOut(not fmt.fontStrikeOut())
         self.text_edit_entry.mergeCurrentCharFormat(fmt)
+        self._mark_modified()
+
+    def _insert_reference(self):
+        url, ok = QInputDialog.getText(self, "Insert Link", "URL:")
+        if not ok or not url:
+            return
+
+        if url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        cursor = self.text_edit_entry.textCursor()
+        text = cursor.selectedText() or url
+
+        fmt = QTextCharFormat()
+        fmt.setAnchor(True)
+        fmt.setAnchorHref(url)
+        fmt.setForeground(QColor("#4a9eff"))   # синий, как ссылка
+        fmt.setFontUnderline(True)
+
+        cursor.insertText(text, fmt)
         self._mark_modified()
 
     def _sync_format_buttons(self, fmt):
@@ -390,7 +415,7 @@ class Window(QMainWindow):
         if text is None:
             return
 
-        self.text_edit_entry.setPlainText(text)
+        self.text_edit_entry.setHtml(text)
         self.current_file = path
         self.is_modified = False
         self._update_title()

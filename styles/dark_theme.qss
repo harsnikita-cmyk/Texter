@@ -177,6 +177,6 @@ QMessageBox QPushButton:hover {
 }
 
 QMessageBox QPushButton:default {
-    background: #716a09;
-    border-color: #aabb11;
+    background: #094771;
+    border-color: #1177bb;
 }
