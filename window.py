@@ -42,7 +42,7 @@ class Window(QMainWindow):
 
         self._search_debounce = QTimer(self)
         self._search_debounce.setSingleShot(True)
-        self._search_debounce.setInterval(300)
+        self._search_debounce.setInterval(100)
         self._search_debounce.timeout.connect(self._refresh_search)
 
         self._setup_ui()
@@ -74,10 +74,11 @@ class Window(QMainWindow):
         self.search_bar.search_requested.connect(self._do_search)
         self.search_bar.next_requested.connect(self._find_next)
         self.search_bar.prev_requested.connect(self._find_prev)
+        self.search_bar.replace_requested.connect(self._replace_current)
+        self.search_bar.replace_all_requested.connect(self._replace_all)
         self.search_bar.closed.connect(self._hide_search_bar)
         QShortcut(QKeySequence("Escape"), self, self._hide_search_bar)
         self.search_bar.hide()
-        self.search_bar.setFixedHeight(36)
         layout.addWidget(self.search_bar)
 
         self.setCentralWidget(self.container)
@@ -104,9 +105,11 @@ class Window(QMainWindow):
 
     def _on_text_changed(self):
         self._mark_modified()
-
         count = len(self.text_editor.toPlainText())
         self.symbols_label.setText(str(count))
+
+        if self.search_bar.isVisible():
+            self._search_debounce.start()
 
     def _mark_modified(self):
         if not self.is_modified:
@@ -332,6 +335,12 @@ class Window(QMainWindow):
             QKeySequence.StandardKey.Find,
             slot=self._show_search_bar,
         )
+        self._add_action(
+                    self.edit_menu,
+                    "Replace",
+                    QKeySequence("Ctrl+H"),
+                    slot=self._show_replace_bar,
+                )
 
         self.view_menu = self.menu_bar.addMenu("View")
 
@@ -358,6 +367,13 @@ class Window(QMainWindow):
         )
 
     def _show_search_bar(self):
+        self.search_bar.show_replace(False)   # скрыть строку Replace
+        self.search_bar.show()
+        self.search_bar.search_input.setFocus()
+        self.search_bar.search_input.selectAll()
+
+    def _show_replace_bar(self):
+        self.search_bar.show_replace(True)    # показать строку Replace
         self.search_bar.show()
         self.search_bar.search_input.setFocus()
         self.search_bar.search_input.selectAll()
@@ -373,58 +389,100 @@ class Window(QMainWindow):
         if not text:
             self.text_editor.setExtraSelections([])
             self.search_bar.match_label.setText("")
+            self._match_positions = []
+            self._current_match_index = -1
             return
-        
-        cursor = self.text_editor.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        self.text_editor.setTextCursor(cursor)
 
+        self._match_positions = self._find_all_matches(text)
 
-        if self.text_editor.find(text):
-            self._highlight_all(text)
-            count = self._count_matches(text)
-            self.search_bar.match_label.setText(f"{count} matches")
-        else:
+        if not self._match_positions:
             self.text_editor.setExtraSelections([])
-            self.search_bar.match_label.setText("Not found")
+            self.search_bar.match_label.setText("No results")
+            self._current_match_index = -1
+            return
+
+        self._current_match_index = 0
+        self._highlight_all(text)
+        self._jump_to_current_match(text)
+        self._update_match_label()
+
+    def _find_all_matches(self, text: str) -> list[int]:
+        positions = []
+        cursor = QTextCursor(self.text_editor.document())
+        while True:
+            cursor = self.text_editor.document().find(text, cursor)
+            if cursor.isNull():
+                break
+            positions.append(cursor.selectionStart())
+        return positions
 
     def _find_next(self):
         text = self.search_bar.search_input.text()
-        if text:
-            self.text_editor.find(text)
+        if not text or not self._match_positions:
+            return
+
+        self._current_match_index = (self._current_match_index + 1) % len(
+            self._match_positions
+        )
+
+        self._highlight_all(text)
+        self._jump_to_current_match(text)
+        self._update_match_label()
 
     def _find_prev(self):
         text = self.search_bar.search_input.text()
-        if text:
-            from PySide6.QtGui import QTextDocument
+        if not text or not self._match_positions:
+            return
 
-            self.text_editor.find(text, QTextDocument.FindFlag.FindBackward)
+        # -1 % 9 == 8 в Python
+        self._current_match_index = (self._current_match_index - 1) % len(
+            self._match_positions
+        )
+
+        self._highlight_all(text)
+        self._jump_to_current_match(text)
+        self._update_match_label()
+
+    def _jump_to_current_match(self, text: str):
+        pos = self._match_positions[self._current_match_index]
+        cursor = self.text_editor.textCursor()
+        cursor.setPosition(pos)
+        cursor.setPosition(pos + len(text), QTextCursor.MoveMode.KeepAnchor)
+        self.text_editor.setTextCursor(cursor)
+        self.text_editor.ensureCursorVisible()
+
+    def _update_match_label(self):
+        total = len(self._match_positions)
+        if total == 0:
+            self.search_bar.match_label.setText("")
+            return
+        current = self._current_match_index + 1
+        self.search_bar.match_label.setText(f"{current} of {total}")
 
     def _highlight_all(self, text: str):
-        if not text:
+        if not text or not self._match_positions:
             self.text_editor.setExtraSelections([])
             return
 
+        normal_fmt = QTextCharFormat()
+        normal_fmt.setBackground(QColor("#f0e68c"))
+        normal_fmt.setForeground(QColor("#000000"))
+
+        current_fmt = QTextCharFormat()
+        current_fmt.setBackground(QColor("#ffa500"))
+        current_fmt.setForeground(QColor("#000000"))
+
         selections = []
-
-        # формат подсветки
-        highlight_format = QTextCharFormat()
-        highlight_format.setBackground(QColor("#f0e68c"))  # жёлтый
-        highlight_format.setForeground(QColor("#000000"))  # чёрный текст
-
-        # искать все вхождения в документе
         doc = self.text_editor.document()
-        cursor = QTextCursor(doc)  # курсор в начале документа
+        for i, pos in enumerate(self._match_positions):
+            cursor = QTextCursor(doc)
+            cursor.setPosition(pos)
+            cursor.setPosition(pos + len(text), QTextCursor.MoveMode.KeepAnchor)
 
-        while True:
-            cursor = doc.find(text, cursor)
-            if cursor.isNull():
-                break
-
-            selection = QTextEdit.ExtraSelection()
-            selection.cursor = cursor
-            selection.format = highlight_format
-            selections.append(selection)
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            sel.format = current_fmt if i == self._current_match_index else normal_fmt
+            selections.append(sel)
 
         self.text_editor.setExtraSelections(selections)
 
@@ -444,11 +502,121 @@ class Window(QMainWindow):
         if not text:
             self.text_editor.setExtraSelections([])
             self.search_bar.match_label.setText("")
+            self._match_positions = []
+            self._current_match_index = -1
             return
 
+        old_index = self._current_match_index
+        self._match_positions = self._find_all_matches(text)
+
+        if not self._match_positions:
+            self.text_editor.setExtraSelections([])
+            self.search_bar.match_label.setText("No results")
+            self._current_match_index = -1
+            return
+
+        if old_index < 0 or old_index >= len(self._match_positions):
+            self._current_match_index = 0
+        else:
+            self._current_match_index = old_index
+
         self._highlight_all(text)
-        count = self._count_matches(text)
-        self.search_bar.match_label.setText(f"{count} matches")
+        self._update_match_label()
+
+    def _replace_current(self):
+        find_text = self.search_bar.search_input.text()
+        replace_text = self.search_bar.replace_input.text()
+
+        if not find_text or not self._match_positions:
+            return
+
+        # текущее совпадение под курсором?
+        pos = self._match_positions[self._current_match_index]
+
+        cursor = self.text_editor.textCursor()
+        cursor.setPosition(pos)
+        cursor.setPosition(pos + len(find_text), QTextCursor.MoveMode.KeepAnchor)
+        self.text_editor.setTextCursor(cursor)
+
+        # заменить
+        cursor.insertText(replace_text)
+
+        # пересчитать позиции и подсветку
+        self._refresh_search_after_replace(find_text, replace_text)
+
+        # перейти к следующему
+        self._find_next()
+
+    def _replace_all(self):
+        find_text = self.search_bar.search_input.text()
+        replace_text = self.search_bar.replace_input.text()
+
+        if not find_text:
+            return
+
+        # защита от бесконечного цикла
+        if find_text == replace_text:
+            QMessageBox.information(self, "Replace All", "Nothing to replace (same text)")
+            return
+
+        # блокируем сигналы редактора чтобы не запускать дебаунс на каждое изменение
+        self.text_editor.blockSignals(True)
+
+        # в начало документа
+        cursor = self.text_editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.text_editor.setTextCursor(cursor)
+
+        count = 0
+        while self.text_editor.find(find_text):
+            text_cursor = self.text_editor.textCursor()
+            text_cursor.insertText(replace_text)
+            count += 1
+
+        # разблокируем сигналы
+        self.text_editor.blockSignals(False)
+
+        # пересчитать совпадения
+        self._match_positions = self._find_all_matches(find_text)
+
+        if self._match_positions:
+            self._current_match_index = 0
+            self._highlight_all(find_text)
+            self._jump_to_current_match(find_text)
+            self._update_match_label()
+        else:
+            self.text_editor.setExtraSelections([])
+            self.search_bar.match_label.setText("")
+            self._current_match_index = -1
+
+        # обновить счётчик символов
+        self._mark_modified()
+        count_chars = len(self.text_editor.toPlainText())
+        self.symbols_label.setText(str(count_chars))
+
+        QMessageBox.information(self, "Replace All", f"Replaced: {count}")
+
+    def _refresh_search_after_replace(self, find_text: str, replace_text: str):
+        # сохраняем старый индекс
+        old_index = self._current_match_index
+
+        # пересчитываем позиции
+        self._match_positions = self._find_all_matches(find_text)
+
+        if not self._match_positions:
+            self.text_editor.setExtraSelections([])
+            self.search_bar.match_label.setText("")
+            self._current_match_index = -1
+            return
+
+        # индекс не выходит за границы
+        if old_index < 0 or old_index >= len(self._match_positions):
+            self._current_match_index = 0
+        else:
+            self._current_match_index = old_index
+
+        self._highlight_all(find_text)
+        self._update_match_label()
 
     def _add_action(
         self, menu: QMenu, text, shortcut, checkable=False, checked=False, slot=None
