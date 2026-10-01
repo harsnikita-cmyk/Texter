@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QTextEdit,
+    QFontComboBox,
+    QComboBox,
 )
 from PySide6.QtGui import (
     QAction,
@@ -20,7 +22,7 @@ from PySide6.QtGui import (
     QShortcut,
 )
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSize
 
 import os
 
@@ -40,6 +42,8 @@ class Window(QMainWindow):
         self.current_file: str | None = None
         self.is_modified: bool = False
 
+        self._syncing = False
+
         self._search_debounce = QTimer(self)
         self._search_debounce.setSingleShot(True)
         self._search_debounce.setInterval(100)
@@ -55,16 +59,14 @@ class Window(QMainWindow):
         layout.setSpacing(0)
 
         self.text_editor = TexterEdit(self)
+        self.text_editor.currentCharFormatChanged.connect(self._safe_sync)
+        self.text_editor.selectionChanged.connect(self._on_selection_changed)
         font = self.text_editor.font()
         font.setFamily("Calibri")
         font.setPointSize(12)
         self.text_editor.setFont(font)
         self.base_font_size = self.text_editor.font().pointSizeF()
         self.text_editor.textChanged.connect(self._on_text_changed)
-        self.text_editor.currentCharFormatChanged.connect(self._sync_format_buttons)
-        self.text_editor.selectionChanged.connect(
-            lambda: self._sync_format_buttons(self._current_format())
-        )
 
         self.text_editor.cursorPositionChanged.connect(self._on_cursor_moved)
 
@@ -86,6 +88,9 @@ class Window(QMainWindow):
         self._setup_toolbar()
         self._setup_menu()
         self._setup_status_bar()
+
+    def _on_selection_changed(self):
+        self._safe_sync(self._current_format())
 
     def _on_cursor_moved(self):
         cursor = self.text_editor.textCursor()
@@ -124,6 +129,28 @@ class Window(QMainWindow):
 
     def _setup_toolbar(self):
         self.tool_bar = QToolBar(self)
+
+        self.font_combo = QFontComboBox()
+        self.font_combo.setToolTip("Font Family")
+        self.font_combo.setMinimumWidth(150)
+        self.font_combo.setMaximumWidth(220)
+        self.font_combo.currentFontChanged.connect(self._change_font_family)
+        self.tool_bar.addWidget(self.font_combo)
+
+        self.size_combo = QComboBox()
+        self.size_combo.setToolTip("Font Size")
+        self.size_combo.setEditable(True)   # можно ввести свой размер вручную
+        self.size_combo.addItems([
+            "8", "9", "10", "11", "12", "14", "16", "18",
+            "20", "22", "24", "28", "32", "36", "48", "72",
+        ])
+        self.size_combo.setCurrentText("12")
+        self.size_combo.setMinimumWidth(60)
+        self.size_combo.setMaximumWidth(80)
+        self.size_combo.currentTextChanged.connect(self._change_font_size)
+        self.tool_bar.addWidget(self.size_combo)
+
+
         self.bold_button = self._add_toolbar_action(
             self.tool_bar,
             "B",
@@ -132,6 +159,7 @@ class Window(QMainWindow):
             style="bold",
             slot=self._toggle_bold,
         )
+
         self.italic_button = self._add_toolbar_action(
             self.tool_bar,
             "I",
@@ -140,6 +168,7 @@ class Window(QMainWindow):
             style="italic",
             slot=self._toggle_italic,
         )
+
         self.underline_button = self._add_toolbar_action(
             self.tool_bar,
             "U",
@@ -148,6 +177,7 @@ class Window(QMainWindow):
             style="underline",
             slot=self._toggle_underline,
         )
+
         self.tool_bar.addSeparator()
         self.strikethrough_button = self._add_toolbar_action(
             self.tool_bar,
@@ -157,6 +187,7 @@ class Window(QMainWindow):
             style="strike",
             slot=self._toggle_strikethrough,
         )
+
         self.reference_button = self._add_toolbar_action(
             self.tool_bar,
             "🔗",
@@ -164,6 +195,7 @@ class Window(QMainWindow):
             checkable=False,
             slot=self._insert_reference,
         )
+
         self.tool_bar.setMovable(False)
         self.addToolBar(self.tool_bar)
 
@@ -193,6 +225,26 @@ class Window(QMainWindow):
 
         toolbar.addAction(act)
         return act
+
+    def _change_font_family(self, qfont: QFont):
+        fmt = QTextCharFormat()
+        fmt.setFontFamily(qfont.family())
+        self.text_editor.mergeCurrentCharFormat(fmt)
+        self._mark_modified()
+
+    def _change_font_size(self, size_str: str):
+        try:
+            size = float(size_str)
+        except ValueError:
+            return
+
+        if size <= 0 or size > 256:
+            return
+
+        fmt = QTextCharFormat()
+        fmt.setFontPointSize(size)
+        self.text_editor.mergeCurrentCharFormat(fmt)
+        self._mark_modified()
 
     def _toggle_bold(self):
         fmt = self._current_format()
@@ -224,7 +276,7 @@ class Window(QMainWindow):
         if not ok or not url:
             return
 
-        if url.startswith(("http://", "https://")):
+        if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
         cursor = self.text_editor.textCursor()
@@ -239,17 +291,62 @@ class Window(QMainWindow):
         cursor.insertText(text, fmt)
         self._mark_modified()
 
-    def _sync_format_buttons(self, fmt):
-        is_bold = fmt.fontWeight() >= QFont.Weight.Bold
-        for button, checked in (
-            (self.bold_button, is_bold),
-            (self.italic_button, fmt.fontItalic()),
-            (self.underline_button, fmt.fontUnderline()),
-            (self.strikethrough_button, fmt.fontStrikeOut()),
-        ):
-            button.blockSignals(True)
-            button.setChecked(checked)
-            button.blockSignals(False)
+    def _sync_format_buttons(self, fmt: QTextCharFormat):
+        if self._syncing:
+            return
+        if not hasattr(self, "bold_button"):
+            return
+
+        self._syncing = True
+        try:
+            # копия fmt — важно!
+            fmt = QTextCharFormat(fmt)
+            
+            is_bold = fmt.fontWeight() >= QFont.Weight.Bold
+            for button, checked in (
+                (self.bold_button, is_bold),
+                (self.italic_button, fmt.fontItalic()),
+                (self.underline_button, fmt.fontUnderline()),
+                (self.strikethrough_button, fmt.fontStrikeOut()),
+            ):
+                button.blockSignals(True)
+                button.setChecked(checked)
+                button.blockSignals(False)
+
+            if not hasattr(self, "font_combo"):
+                return
+            family = fmt.fontFamily()
+            if family:
+                self.font_combo.blockSignals(True)
+                self.font_combo.setCurrentFont(QFont(family))
+                self.font_combo.blockSignals(False)
+
+            if not hasattr(self, "size_combo"):
+                return
+            size = fmt.fontPointSize()
+            if size > 0:
+                self.size_combo.blockSignals(True)
+                self.size_combo.setCurrentText(str(int(size)))
+                self.size_combo.blockSignals(False)
+        except RuntimeError:
+            # C++ объект уже удалён
+            pass
+        finally:
+            self._syncing = False
+
+    def _safe_sync(self, fmt):
+        """Безопасная обёртка — копирует fmt и ловит RuntimeError."""
+        if self._syncing:
+            return
+        if not hasattr(self, "bold_button"):
+            return
+        self._syncing = True
+        try:
+            self._sync_format_buttons(QTextCharFormat(fmt))
+        except RuntimeError:
+            pass
+        finally:
+            self._syncing = False
 
     def _setup_menu(self):
         self.menu_bar = self.menuBar()
